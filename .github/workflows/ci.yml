@@ -67,6 +67,11 @@ jobs:
         if: runner.os == 'Linux'
         uses: rui314/setup-mold@v1
 
+      # aws-lc-sys (russh's crypto backend) needs NASM to build on Windows.
+      - name: Set up NASM
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
       - name: Restore dependency cache
         uses: Swatinem/rust-cache@v2
         with:
