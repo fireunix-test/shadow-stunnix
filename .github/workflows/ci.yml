@@ -1,10 +1,10 @@
 # Compile/lint/test the private fireunix-app/shadow-stunnix source.
 #
 # This repository is PUBLIC: the source is checked out at run time with a
-# read-only deploy key and must never reach the logs. Compiler diagnostics use
-# the short format (path:line: message, no code snippets), rustfmt reports only
-# file names, help/note suggestions are stripped, backtraces are off and
-# nothing is uploaded as an artifact.
+# read-only deploy key. Logs may show the few lines around a compiler error,
+# but never whole files: each step's output is capped, rustfmt reports only
+# file names, passing tests are not listed, backtraces are off and nothing is
+# uploaded as an artifact.
 name: CI
 
 on:
@@ -57,16 +57,17 @@ jobs:
         with:
           workspaces: shadow-stunnix -> target
 
-      - name: Install log redactor
+      - name: Install log limiter
         working-directory: .
         run: |
-          # Short diagnostics still carry clippy/rustc "help: ..." suggestions,
-          # which can quote source. Keep only the location and the message.
-          sudo tee /usr/local/bin/redact >/dev/null <<'SH'
+          # Diagnostics may quote the lines around an error, which is allowed,
+          # but a flood of errors must not dump large parts of the source:
+          # cap each step's output and report how much was cut.
+          sudo tee /usr/local/bin/cap >/dev/null <<'SH'
           #!/bin/sh
-          exec sed -E -e 's/: help: .*$//' -e 's/: note: .*$//'
+          exec awk -v max=1500 'NR<=max { print; next } { cut++ } END { if (cut) printf "... output truncated: %d more lines not shown\n", cut }'
           SH
-          sudo chmod +x /usr/local/bin/redact
+          sudo chmod +x /usr/local/bin/cap
 
       - name: rustfmt (file names only)
         run: |
@@ -81,10 +82,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -o pipefail
-          cargo clippy --locked --all-targets --message-format=short -- -D warnings 2>&1 | redact
+          cargo clippy --locked --all-targets -- -D warnings 2>&1 | cap
 
       - name: test
         if: ${{ !cancelled() && inputs.run_tests }}
         run: |
           set -o pipefail
-          cargo test --locked --no-fail-fast --quiet --message-format=short 2>&1 | redact
+          cargo test --locked --no-fail-fast --quiet 2>&1 | cap
