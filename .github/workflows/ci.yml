@@ -1,0 +1,74 @@
+# Compile/lint/test the private fireunix-app/shadow-stunnix source.
+#
+# This repository is PUBLIC: the source is checked out at run time with a
+# read-only deploy key and must never reach the logs. Compiler diagnostics use
+# the short format (path:line: message, no code snippets), rustfmt reports only
+# file names, backtraces are off and nothing is uploaded as an artifact.
+name: CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch of fireunix-app/shadow-stunnix"
+        required: true
+        default: main
+      run_tests:
+        description: "Run cargo test"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ inputs.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "0"
+    defaults:
+      run:
+        working-directory: shadow-stunnix
+    steps:
+      - name: Check out private source
+        uses: actions/checkout@v4
+        with:
+          repository: fireunix-app/shadow-stunnix
+          ref: ${{ inputs.ref }}
+          path: shadow-stunnix
+          ssh-key: ${{ secrets.STUNNIX_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Restore dependency cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: shadow-stunnix -> target
+
+      - name: rustfmt (file names only)
+        run: |
+          cargo fmt --all
+          if ! git diff --quiet; then
+            echo "::error::rustfmt would change these files:"
+            git diff --name-only
+            exit 1
+          fi
+
+      - name: clippy
+        if: ${{ !cancelled() }}
+        run: cargo clippy --locked --all-targets --message-format=short -- -D warnings
+
+      - name: test
+        if: ${{ !cancelled() && inputs.run_tests }}
+        run: cargo test --locked --no-fail-fast --message-format=short
