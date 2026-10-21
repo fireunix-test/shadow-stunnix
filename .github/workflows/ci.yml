@@ -4,7 +4,7 @@
 # read-only deploy key. Logs may show the few lines around a compiler error,
 # but never whole files: each step's output is capped, rustfmt reports only
 # file names, passing tests are not listed, backtraces are off and nothing is
-# uploaded as an artifact.
+# uploaded as an artifact. Runs on Linux, macOS and Windows (selectable).
 name: CI
 
 on:
@@ -14,6 +14,10 @@ on:
         description: "Branch of fireunix-app/shadow-stunnix"
         required: true
         default: main
+      os:
+        description: "Runners as a JSON list (default: Linux, macOS, Windows)"
+        required: false
+        default: '["ubuntu-24.04","macos-14","windows-2022"]'
       run_tests:
         description: "Run cargo test"
         type: boolean
@@ -28,7 +32,12 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-24.04
+    name: check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.os) }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: never
@@ -37,6 +46,7 @@ jobs:
       RUST_BACKTRACE: "0"
     defaults:
       run:
+        shell: bash
         working-directory: shadow-stunnix
     steps:
       - name: Check out private source
@@ -54,6 +64,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Set up mold linker
+        if: runner.os == 'Linux'
         uses: rui314/setup-mold@v1
 
       - name: Restore dependency cache
@@ -79,13 +90,18 @@ jobs:
           # Diagnostics may quote the lines around an error, which is allowed,
           # but a flood of errors must not dump large parts of the source:
           # cap each step's output and report how much was cut.
-          sudo tee /usr/local/bin/cap >/dev/null <<'SH'
+          mkdir -p "$HOME/bin"
+          cat > "$HOME/bin/cap" <<'SH'
           #!/bin/sh
           exec awk -v max=1500 'NR<=max { print; next } { cut++ } END { if (cut) printf "... output truncated: %d more lines not shown\n", cut }'
           SH
-          sudo chmod +x /usr/local/bin/cap
+          chmod +x "$HOME/bin/cap"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
 
+      # Formatting is platform-independent; run it once (Linux) so Windows
+      # line-ending conversion cannot produce false positives.
       - name: rustfmt (file names only)
+        if: runner.os == 'Linux'
         run: |
           cargo fmt --all
           if ! git diff --quiet; then
