@@ -3,7 +3,8 @@
 # This repository is PUBLIC: the source is checked out at run time with a
 # read-only deploy key and must never reach the logs. Compiler diagnostics use
 # the short format (path:line: message, no code snippets), rustfmt reports only
-# file names, backtraces are off and nothing is uploaded as an artifact.
+# file names, help/note suggestions are stripped, backtraces are off and
+# nothing is uploaded as an artifact.
 name: CI
 
 on:
@@ -56,6 +57,17 @@ jobs:
         with:
           workspaces: shadow-stunnix -> target
 
+      - name: Install log redactor
+        working-directory: .
+        run: |
+          # Short diagnostics still carry clippy/rustc "help: ..." suggestions,
+          # which can quote source. Keep only the location and the message.
+          sudo tee /usr/local/bin/redact >/dev/null <<'SH'
+          #!/bin/sh
+          exec sed -E -e 's/: help: .*$//' -e 's/: note: .*$//'
+          SH
+          sudo chmod +x /usr/local/bin/redact
+
       - name: rustfmt (file names only)
         run: |
           cargo fmt --all
@@ -67,8 +79,12 @@ jobs:
 
       - name: clippy
         if: ${{ !cancelled() }}
-        run: cargo clippy --locked --all-targets --message-format=short -- -D warnings
+        run: |
+          set -o pipefail
+          cargo clippy --locked --all-targets --message-format=short -- -D warnings 2>&1 | redact
 
       - name: test
         if: ${{ !cancelled() && inputs.run_tests }}
-        run: cargo test --locked --no-fail-fast --message-format=short
+        run: |
+          set -o pipefail
+          cargo test --locked --no-fail-fast --message-format=short 2>&1 | redact
