@@ -32,7 +32,10 @@ jobs:
     timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: never
-      CARGO_INCREMENTAL: "0"
+      # Incremental builds of the private crate(s) are cached below; debuginfo
+      # is off to speed up compiling/linking and keep the caches small.
+      CARGO_INCREMENTAL: "1"
+      CARGO_PROFILE_DEV_DEBUG: "0"
       RUST_BACKTRACE: "0"
     defaults:
       run:
@@ -52,10 +55,25 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Set up mold linker
+        uses: rui314/setup-mold@v1
+
       - name: Restore dependency cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: shadow-stunnix -> target
+
+      # rust-cache keeps only third-party dependencies; the private crates are
+      # rebuilt every run. Their incremental state is cached separately, per
+      # private branch, falling back to the newest state of any branch.
+      - name: Restore incremental cache
+        uses: actions/cache/restore@v4
+        with:
+          path: shadow-stunnix/target/debug/incremental
+          key: incr-${{ runner.os }}-${{ inputs.ref }}-${{ github.run_id }}
+          restore-keys: |
+            incr-${{ runner.os }}-${{ inputs.ref }}-
+            incr-${{ runner.os }}-
 
       - name: Install log limiter
         working-directory: .
@@ -89,3 +107,10 @@ jobs:
         run: |
           set -o pipefail
           cargo test --locked --no-fail-fast --quiet 2>&1 | cap
+
+      - name: Save incremental cache
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@v4
+        with:
+          path: shadow-stunnix/target/debug/incremental
+          key: incr-${{ runner.os }}-${{ inputs.ref }}-${{ github.run_id }}
