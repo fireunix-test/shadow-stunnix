@@ -87,4 +87,4 @@ jobs:
         if: ${{ !cancelled() && inputs.run_tests }}
         run: |
           set -o pipefail
-          cargo test --locked --no-fail-fast --message-format=short 2>&1 | redact
+          cargo test --locked --no-fail-fast --quiet --message-format=short 2>&1 | redact
