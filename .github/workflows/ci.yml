@@ -32,9 +32,7 @@ jobs:
     timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: never
-      # Incremental builds of the private crate(s) are cached below; debuginfo
-      # is off to speed up compiling/linking and keep the caches small.
-      CARGO_INCREMENTAL: "1"
+      # Debuginfo off: faster compile/link and smaller caches.
       CARGO_PROFILE_DEV_DEBUG: "0"
       RUST_BACKTRACE: "0"
     defaults:
@@ -98,12 +96,18 @@ jobs:
 
       - name: clippy
         if: ${{ !cancelled() }}
+        env:
+          # Step-level so it wins over rust-cache, which exports CARGO_INCREMENTAL=0.
+          CARGO_INCREMENTAL: "1"
         run: |
           set -o pipefail
           cargo clippy --locked --all-targets -- -D warnings 2>&1 | cap
 
       - name: test
         if: ${{ !cancelled() && inputs.run_tests }}
+        env:
+          # Step-level so it wins over rust-cache, which exports CARGO_INCREMENTAL=0.
+          CARGO_INCREMENTAL: "1"
         run: |
           set -o pipefail
           cargo test --locked --no-fail-fast --quiet 2>&1 | cap
