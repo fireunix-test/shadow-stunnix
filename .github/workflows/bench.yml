@@ -1,0 +1,148 @@
+# Run the criterion benchmarks of the private fireunix-app/shadow-stunnix
+# source on a Linux runner and report the summary numbers.
+#
+# This repository is PUBLIC: the source is checked out at run time with a
+# read-only deploy key. Only benchmark result lines (ids, time / thrpt /
+# change, percentile lines) and the capped diagnostics of a failed build or a
+# panicking bench are printed; nothing is uploaded as an artifact.
+#
+# Several refs can be measured one after another in the same job, so they see
+# the same runner (shared-runner noise is large between jobs). The first ref
+# is saved as the criterion baseline, later refs are compared against it.
+name: Bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      refs:
+        description: "Space-separated branches of fireunix-app/shadow-stunnix (first = baseline)"
+        required: true
+        default: main
+      benches:
+        description: "Space-separated bench targets"
+        required: false
+        default: mux
+      filter:
+        description: "Criterion name filter (regex), empty = all"
+        required: false
+        default: ""
+      args:
+        description: "Extra criterion args, e.g. --measurement-time 5 --sample-size 20"
+        required: false
+        default: ""
+      percentiles:
+        description: "Print mux_rtt p50/p90/p99 (BENCH_PERCENTILES=1)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: bench (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: never
+      RUST_BACKTRACE: "0"
+    defaults:
+      run:
+        shell: bash
+        working-directory: shadow-stunnix
+    steps:
+      - name: Check out private source
+        uses: actions/checkout@v4
+        with:
+          repository: fireunix-app/shadow-stunnix
+          path: shadow-stunnix
+          fetch-depth: 0
+          ssh-key: ${{ secrets.STUNNIX_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up mold linker
+        uses: rui314/setup-mold@v1
+
+      - name: Restore dependency cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: shadow-stunnix -> target
+          key: bench
+
+      - name: Install log limiter
+        working-directory: .
+        run: |
+          # Same cap as ci.yml: a flood of compiler errors must not dump large
+          # parts of the source.
+          mkdir -p "$HOME/bin"
+          cat > "$HOME/bin/cap" <<'SH'
+          #!/bin/sh
+          exec awk -v max=400 'NR<=max { print; next } { cut++ } END { if (cut) printf "... output truncated: %d more lines not shown\n", cut }'
+          SH
+          chmod +x "$HOME/bin/cap"
+          # Keeps only benchmark result lines and panics.
+          cat > "$HOME/bin/results" <<'SH'
+          #!/bin/sh
+          exec grep -E --line-buffered '^[A-Za-z0-9_.+-]+/[^ ]*( |$)|^ +(time|thrpt|change):|p50=|Performance has|No change|panicked|^error' | grep -v '^Benchmarking'
+          SH
+          chmod +x "$HOME/bin/results"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Runner
+        run: |
+          {
+            echo '### Runner'
+            echo '```'
+            nproc
+            lscpu | grep -E 'Model name|^CPU\(s\)' || true
+            rustc -V
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Bench
+        env:
+          REFS: ${{ inputs.refs }}
+          BENCHES: ${{ inputs.benches }}
+          FILTER: ${{ inputs.filter }}
+          ARGS: ${{ inputs.args }}
+          BENCH_PERCENTILES: ${{ inputs.percentiles && '1' || '' }}
+        run: |
+          set -o pipefail
+          [ -n "$BENCH_PERCENTILES" ] || unset BENCH_PERCENTILES
+          base=""
+          status=0
+          for ref in $REFS; do
+            git checkout -q --detach "origin/$ref"
+            name="$(echo "$ref" | tr -c 'A-Za-z0-9_\n' '_')"
+            if [ -z "$base" ]; then
+              harness="--save-baseline $name"
+              base="$name"
+            else
+              harness="--baseline $base"
+            fi
+            flags=""
+            for b in $BENCHES; do flags="$flags --bench $b"; done
+            echo "::group::build $ref"
+            # shellcheck disable=SC2086
+            if ! cargo bench --locked --no-run --quiet $flags 2>&1 | cap; then
+              echo "::endgroup::"
+              echo "::error::bench build failed for $ref"
+              status=1
+              continue
+            fi
+            echo "::endgroup::"
+            for b in $BENCHES; do
+              {
+                echo "### $ref — $b ($(git rev-parse --short HEAD))"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              # shellcheck disable=SC2086
+              cargo bench --locked --bench "$b" -- $FILTER $harness $ARGS 2>&1 \
+                | results | cap | tee -a "$GITHUB_STEP_SUMMARY" || status=1
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            done
+          done
+          exit $status
