@@ -127,7 +127,8 @@ jobs:
               harness="--save-baseline $name"
               base="$name"
             else
-              harness="--baseline $base"
+              # Lenient: bench ids new in this ref get absolute numbers only.
+              harness="--baseline-lenient $base"
             fi
             flags=""
             for b in $BENCHES; do flags="$flags --bench $b"; done
