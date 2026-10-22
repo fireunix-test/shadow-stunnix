@@ -83,10 +83,16 @@ jobs:
           exec awk -v max=400 'NR<=max { print; next } { cut++ } END { if (cut) printf "... output truncated: %d more lines not shown\n", cut }'
           SH
           chmod +x "$HOME/bin/cap"
-          # Keeps only benchmark result lines and panics.
+          # Keeps only benchmark result lines and panics (with the panic
+          # message, which rustc prints on the line after the location).
           cat > "$HOME/bin/results" <<'SH'
           #!/bin/sh
-          exec grep -E --line-buffered '^[A-Za-z0-9_.+-]+/[^ ]*( |$)|^ +(time|thrpt|change):|p50=|Performance has|No change|panicked|^error' | grep -v '^Benchmarking'
+          exec awk '
+            msg { print; fflush(); msg = 0; next }
+            /panicked/ { print; fflush(); msg = 1; next }
+            /^Benchmarking/ { next }
+            /^[A-Za-z0-9_.+-]+\/[^ ]*( |$)|^ +(time|thrpt|change):|p50=|Performance has|No change|^error/ { print; fflush() }
+          '
           SH
           chmod +x "$HOME/bin/results"
           echo "$HOME/bin" >> "$GITHUB_PATH"
