@@ -9,13 +9,16 @@
 # Several refs can be measured one after another in the same job, so they see
 # the same runner (shared-runner noise is large between jobs). The first ref
 # is saved as the criterion baseline, later refs are compared against it.
+# A ref written as `branch:KEY=VAL[,KEY=VAL]` runs that branch's benches with
+# the extra environment variables (e.g. allocator options); the same branch
+# may appear several times with different variables.
 name: Bench
 
 on:
   workflow_dispatch:
     inputs:
       refs:
-        description: "Space-separated branches of fireunix-app/shadow-stunnix (first = baseline)"
+        description: "Space-separated branches of fireunix-app/shadow-stunnix (first = baseline); ref:KEY=VAL[,KEY=VAL] runs that ref with extra env"
         required: true
         default: main
       benches:
@@ -120,9 +123,14 @@ jobs:
           [ -n "$BENCH_PERCENTILES" ] || unset BENCH_PERCENTILES
           base=""
           status=0
-          for ref in $REFS; do
+          for token in $REFS; do
+            ref="${token%%:*}"
+            extra=""
+            if [ "$ref" != "$token" ]; then
+              extra="${token#*:}"
+            fi
             git checkout -q --detach "origin/$ref"
-            name="$(echo "$ref" | tr -c 'A-Za-z0-9_\n' '_')"
+            name="$(echo "$token" | tr -c 'A-Za-z0-9_\n' '_')"
             if [ -z "$base" ]; then
               harness="--save-baseline $name"
               base="$name"
@@ -143,11 +151,12 @@ jobs:
             echo "::endgroup::"
             for b in $BENCHES; do
               {
-                echo "### $ref — $b ($(git rev-parse --short HEAD))"
+                echo "### $token — $b ($(git rev-parse --short HEAD))"
                 echo '```'
               } >> "$GITHUB_STEP_SUMMARY"
               # shellcheck disable=SC2086
-              cargo bench --locked --bench "$b" -- $FILTER $harness $ARGS 2>&1 \
+              env $(echo "$extra" | tr ',' ' ') \
+                cargo bench --locked --bench "$b" -- $FILTER $harness $ARGS 2>&1 \
                 | results | cap | tee -a "$GITHUB_STEP_SUMMARY" || status=1
               echo '```' >> "$GITHUB_STEP_SUMMARY"
             done
